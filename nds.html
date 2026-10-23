@@ -2,51 +2,64 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>NDS Web Emulator</title>
+    
+    <!-- PWA Meta Tags -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="NDS Emulator">
+    <meta name="theme-color" content="#0f1117">
+    <link rel="manifest" href='data:application/manifest+json,{"name":"NDS Web Emulator","short_name":"NDS Emu","start_url":".","display":"standalone","background_color":"%230f1117","theme_color":"%230f1117"}'>
+
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.10.2/nipplejs.min.js"></script>
     <style>
-        body {
+        /* Disable all scrolling and lock viewport height */
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
             background-color: #0f1117;
             color: #e5e7eb;
             font-family: system-ui, -apple-system, sans-serif;
+            margin: 0;
+            padding: 0;
         }
-        /* Adjusted emulator container for dual-screen NDS aspect ratio */
+        /* Emulator fills available space dynamically when active */
         #emulator {
             width: 100%;
-            height: 70vh;
-            min-height: 500px;
-            max-height: 750px;
+            height: 100vh;
+            flex: 1;
         }
     </style>
 </head>
-<body class="min-h-screen flex flex-col justify-between p-4 sm:p-6">
+<body class="flex flex-col justify-between p-3 sm:p-4 box-border">
 
-    <header class="w-full max-w-4xl mx-auto flex flex-col sm:flex-row items-center justify-between pb-4 border-b border-gray-800 gap-3">
+    <header id="appHeader" class="w-full max-w-4xl mx-auto flex flex-col sm:flex-row items-center justify-between pb-3 border-b border-gray-800 gap-3 shrink-0">
         <h1 class="text-xl font-bold tracking-wide text-white flex items-center gap-2">emujs | nds</h1>
         <div class="w-full sm:w-auto flex items-center gap-3">
-            <button onclick="document.getElementById('romInput').click()" class="w-full sm:w-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition text-center">
+            <button onclick="document.getElementById('romInput').click()" class="w-full sm:w-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition text-center cursor-pointer">
                 Load .nds / .zip
             </button>
             <input type="file" id="romInput" accept=".nds,.zip,.7z" class="hidden" onchange="loadRom(event)">
         </div>
     </header>
 
-    <main class="w-full max-w-4xl mx-auto flex-1 flex flex-col items-center justify-center my-4">
-        <div id="dropZone" onclick="document.getElementById('romInput').click()" class="w-full h-72 sm:h-[480px] border-2 border-dashed border-gray-700 hover:border-indigo-500 rounded-xl flex flex-col items-center justify-center cursor-pointer bg-gray-900/50 transition p-6 text-center">
+    <main class="w-full max-w-4xl mx-auto flex-1 flex flex-col items-center justify-center overflow-hidden my-auto">
+        <div id="dropZone" onclick="document.getElementById('romInput').click()" class="w-full h-64 sm:h-[420px] border-2 border-dashed border-gray-700 hover:border-indigo-500 rounded-xl flex flex-col items-center justify-center cursor-pointer bg-gray-900/50 transition p-6 text-center">
             <h3 class="text-lg font-semibold text-white mb-1">Drag NDS ROM here</h3>
             <p class="text-sm text-gray-400 max-w-md">.nds / .zip / .7z</p>
         </div>
 
-        <div id="emulatorWrapper" class="hidden w-full flex flex-col items-center">
-            <div class="w-full flex flex-col sm:flex-row justify-between items-start sm:items-center mb-2 px-1 gap-2">
-                <span id="gameTitle" class="text-xs sm:text-sm font-medium text-gray-300 truncate max-w-[280px] sm:max-w-md">Playing Game</span>
-                <button onclick="quitGame()" class="px-3 py-1 bg-red-600/20 hover:bg-red-600/40 text-red-400 text-xs font-medium rounded border border-red-500/30 transition">
+        <div id="emulatorWrapper" class="hidden w-full h-full flex flex-col items-center">
+            <div class="w-full flex justify-between items-center mb-1 px-1 gap-2 shrink-0">
+                <span id="gameTitle" class="text-xs font-medium text-gray-300 truncate max-w-[240px] sm:max-w-md">Playing Game</span>
+                <button onclick="quitGame()" class="px-2.5 py-0.5 bg-red-600/20 hover:bg-red-600/40 text-red-400 text-xs font-medium rounded border border-red-500/30 transition cursor-pointer">
                     Close
                 </button>
             </div>
-            <div id="emulator" class="bg-black rounded-xl overflow-hidden shadow-2xl border border-gray-800"></div>
+            <div id="emulator" class="bg-black rounded-lg overflow-hidden shadow-2xl border border-gray-800"></div>
         </div>
     </main>
 
@@ -68,6 +81,8 @@
         }
 
         function startEmulator(name, url) {
+            // Hide everything else so only the emulator view takes over
+            document.getElementById('appHeader').classList.add('hidden');
             document.getElementById('dropZone').classList.add('hidden');
             document.getElementById('emulatorWrapper').classList.remove('hidden');
             document.getElementById('gameTitle').innerText = 'Playing: ' + name;
@@ -80,7 +95,7 @@
             window.EJS_core = 'nds';
             window.EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
             window.EJS_startOnLoaded = true;
-            window.EJS_mouse = true; // Enables mouse/touch mapping to the DS bottom touch screen
+            window.EJS_mouse = true;
 
             const existingScript = document.getElementById('ejsLoader');
             if (existingScript) existingScript.remove();
@@ -93,7 +108,9 @@
         }
 
         function quitGame() {
+            // Restore normal layout headers and drop zone
             document.getElementById('emulatorWrapper').classList.add('hidden');
+            document.getElementById('appHeader').classList.remove('hidden');
             document.getElementById('dropZone').classList.remove('hidden');
             document.getElementById('emulator').innerHTML = '';
             
