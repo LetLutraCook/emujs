@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Multi-Console Web Emulator</title>
+    
+    <!-- PWA Meta Tags -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Web Emulator">
+    <meta name="theme-color" content="#0f1117">
+    <link rel="manifest" href='data:application/manifest+json,{"name":"Web Emulator","short_name":"EmuJS","start_url":".","display":"standalone","background_color":"%230f1117","theme_color":"%230f1117"}'>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.10.2/nipplejs.min.js"></script>
+    <style>
+        /* Completely eliminate scrolling, margins, and padding globally */
+        html, body {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            background-color: #0f1117;
+            color: #e5e7eb;
+            font-family: system-ui, -apple-system, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+
+        /* Fullscreen absolute layout for emulator container */
+        #emulatorWrapper {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background-color: #000;
+            z-index: 50;
+            touch-action: none;
+        }
+
+        #emulator {
+            width: 100% !important;
+            height: 100% !important;
+            position: absolute;
+            top: 0;
+            left: 0;
+            touch-action: none;
+        }
+
+        /* Overlay close button so it floats cleanly on top of the game canvas */
+        #closeBtn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 60;
+        }
+    </style>
+</head>
+<body class="flex flex-col justify-between box-border">
+
+    <!-- Normal Header/Dropzone view when no game is loaded -->
+    <header id="appHeader" class="w-full p-4 flex items-center justify-between border-b border-gray-800 bg-[#0f1117] shrink-0">
+        <div class="flex items-center gap-3">
+            <h1 class="text-xl font-bold tracking-wide text-white">emujs</h1>
+            <span class="text-gray-500">|</span>
+            <!-- Console Selector -->
+            <select id="consoleSelectHeader" onchange="updateSelectedConsole(this.value)" class="bg-gray-800 text-white text-sm font-semibold rounded-lg px-3 py-1.5 border border-gray-700 focus:outline-none focus:border-indigo-500 transition cursor-pointer">
+                <option value="nds">Nintendo DS (.nds)</option>
+                <option value="gba">Game Boy Advance (.gba)</option>
+                <option value="gbc">Game Boy Color (.gbc)</option>
+                <option value="gb">Game Boy (.gb)</option>
+                <option value="nes">NES (.nes)</option>
+                <option value="snes">SNES (.snes, .smc)</option>
+                <option value="n64">Nintendo 64 (.n64, .z64)</option>
+                <option value="psx">PlayStation (.bin, .iso)</option>
+                <option value="segaMD">Sega Genesis (.md, .gen)</option>
+                <option value="segaGG">Game Gear (.gg)</option>
+            </select>
+        </div>
+        
+        <button onclick="document.getElementById('romInput').click()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition cursor-pointer">
+            Load ROM
+        </button>
+        <input type="file" id="romInput" accept=".nds,.gba,.gbc,.gb,.nes,.snes,.smc,.n64,.z64,.bin,.iso,.md,.gen,.gg,.zip,.7z" class="hidden" onchange="loadRom(event)">
+    </header>
+
+    <main id="mainContent" class="flex-1 flex flex-col items-center justify-center p-4">
+        <div id="dropZone" onclick="document.getElementById('romInput').click()" class="w-full max-w-2xl h-72 border-2 border-dashed border-gray-700 hover:border-indigo-500 rounded-xl flex flex-col items-center justify-center cursor-pointer bg-gray-900/50 transition p-6 text-center">
+            <h3 id="dropZoneTitle" class="text-lg font-semibold text-white mb-1">Drag Nintendo DS ROM here</h3>
+            <p id="dropZoneExts" class="text-sm text-gray-400">.nds / .zip / .7z</p>
+        </div>
+    </main>
+
+    <!-- Active Emulator Fullscreen Container (Hidden by default) -->
+    <div id="emulatorWrapper" class="hidden">
+        <button id="closeBtn" onclick="quitGame()" class="px-3 py-1.5 bg-red-600/80 hover:bg-red-600 text-white text-xs font-medium rounded shadow-lg transition cursor-pointer">
+            Close Game
+        </button>
+        <div id="emulator"></div>
+    </div>
+
+    <script>
+        if (typeof window.GamepadHandler === 'undefined') {
+            window.GamepadHandler = { init: function() {}, update: function() {} };
+        }
+
+        let activeObjectUrl = null;
+        let selectedConsole = 'nds';
+
+        // Console configurations: names and supported extensions
+        const consoleConfigs = {
+            nds: { name: 'Nintendo DS', exts: ['.nds', '.zip', '.7z'] },
+            gba: { name: 'Game Boy Advance', exts: ['.gba', '.zip', '.7z'] },
+            gbc: { name: 'Game Boy Color', exts: ['.gbc', '.zip', '.7z'] },
+            gb: { name: 'Game Boy', exts: ['.gb', '.zip', '.7z'] },
+            nes: { name: 'NES', exts: ['.nes', '.zip', '.7z'] },
+            snes: { name: 'SNES', exts: ['.snes', '.smc', '.zip', '.7z'] },
+            n64: { name: 'Nintendo 64', exts: ['.n64', '.z64', '.zip', '.7z'] },
+            psx: { name: 'PlayStation', exts: ['.bin', '.iso', '.img', '.zip', '.7z'] },
+            segaMD: { name: 'Sega Genesis', exts: ['.md', '.gen', '.smd', '.zip', '.7z'] },
+            segaGG: { name: 'Game Gear', exts: ['.gg', '.zip', '.7z'] }
+        };
+
+        // File extension auto-detection mapping
+        const extToConsole = {
+            'nds': 'nds',
+            'gba': 'gba',
+            'gbc': 'gbc',
+            'gb': 'gb',
+            'nes': 'nes',
+            'snes': 'snes',
+            'smc': 'snes',
+            'n64': 'n64',
+            'z64': 'n64',
+            'iso': 'psx',
+            'bin': 'psx',
+            'md': 'segaMD',
+            'gen': 'segaMD',
+            'smd': 'segaMD',
+            'gg': 'segaGG'
+        };
+
+        function updateSelectedConsole(consoleKey) {
+            selectedConsole = consoleKey;
+            document.getElementById('consoleSelectHeader').value = consoleKey;
+            
+            const config = consoleConfigs[consoleKey];
+            if (config) {
+                document.getElementById('dropZoneTitle').textContent = `Drag ${config.name} ROM here`;
+                document.getElementById('dropZoneExts').textContent = config.exts.join(' / ');
+            }
+        }
+
+        function detectConsoleFromFile(filename) {
+            const ext = filename.split('.').pop().toLowerCase();
+            return extToConsole[ext] || null;
+        }
+
+        function loadRom(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            // Auto-detect console by extension if matched, otherwise use selected dropdown console
+            const detectedConsole = detectConsoleFromFile(file.name);
+            if (detectedConsole) {
+                selectedConsole = detectedConsole;
+                document.getElementById('consoleSelectHeader').value = detectedConsole;
+            }
+
+            if (activeObjectUrl) URL.revokeObjectURL(activeObjectUrl);
+            activeObjectUrl = URL.createObjectURL(file);
+
+            startEmulator(file.name, activeObjectUrl, selectedConsole);
+        }
+
+        function startEmulator(name, url, core) {
+            // Hide selection elements and take over full screen width/height
+            document.getElementById('appHeader').classList.add('hidden');
+            document.getElementById('mainContent').classList.add('hidden');
+            document.getElementById('emulatorWrapper').classList.remove('hidden');
+
+            const emulatorContainer = document.getElementById('emulator');
+            emulatorContainer.innerHTML = '';
+
+            window.EJS_player = '#emulator';
+            window.EJS_gameUrl = url;
+            window.EJS_core = core; // Set the selected console core dynamically
+            window.EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
+            window.EJS_startOnLoaded = true;
+            window.EJS_mouse = true; // Essential for touch screen mapping
+
+            const existingScript = document.getElementById('ejsLoader');
+            if (existingScript) existingScript.remove();
+
+            const script = document.createElement('script');
+            script.id = 'ejsLoader';
+            script.src = 'https://cdn.emulatorjs.org/stable/data/loader.js';
+            script.async = true;
+            document.body.appendChild(script);
+        }
+
+        function quitGame() {
+            document.getElementById('emulatorWrapper').classList.add('hidden');
+            document.getElementById('appHeader').classList.remove('hidden');
+            document.getElementById('mainContent').classList.remove('hidden');
+            document.getElementById('emulator').innerHTML = '';
+            
+            if (activeObjectUrl) {
+                URL.revokeObjectURL(activeObjectUrl);
+                activeObjectUrl = null;
+            }
+            document.getElementById('romInput').value = '';
+        }
+
+        // Handle drag and drop functionality
+        const dropZone = document.getElementById('dropZone');
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, preventDefaults, false);
+            document.body.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        dropZone.addEventListener('drop', (e) => {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            if (files.length > 0) {
+                document.getElementById('romInput').files = files;
+                loadRom({ target: { files: files } });
+            }
+        });
+    </script>
+</body>
+</html>
