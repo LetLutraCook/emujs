@@ -3,14 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Multi-Console Web Emulator</title>
+    <title>Multi-Console Web Emulator PWA</title>
     
     <!-- PWA Meta Tags -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="Web Emulator">
+    <meta name="apple-mobile-web-app-title" content="Web Emu">
     <meta name="theme-color" content="#0f1117">
-    <link rel="manifest" href='data:application/manifest+json,{"name":"Web Emulator","short_name":"EmuJS","start_url":".","display":"standalone","background_color":"%230f1117","theme_color":"%230f1117"}'>
+    
+    <!-- Dynamic Web App Manifest Link -->
+    <link rel="manifest" id="pwaManifest">
 
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.10.2/nipplejs.min.js"></script>
@@ -79,9 +81,16 @@
             </select>
         </div>
         
-        <button onclick="document.getElementById('romInput').click()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition cursor-pointer">
-            Load ROM
-        </button>
+        <div class="flex items-center gap-2">
+            <!-- PWA Install Button (Hidden until installable) -->
+            <button id="installBtn" class="hidden px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition cursor-pointer flex items-center gap-1.5">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                Install App
+            </button>
+            <button onclick="document.getElementById('romInput').click()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition cursor-pointer">
+                Load ROM
+            </button>
+        </div>
         <input type="file" id="romInput" accept=".nds,.gba,.gbc,.gb,.nes,.snes,.smc,.n64,.z64,.bin,.iso,.md,.gen,.gg,.zip,.7z" class="hidden" onchange="loadRom(event)">
     </header>
 
@@ -101,6 +110,108 @@
     </div>
 
     <script>
+        // Setup PWA Manifest and Offline Caching Service Worker dynamically
+        (function initPWA() {
+            // 1. Generate Manifest with inline SVG icon
+            const svgIcon = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='120' fill='%234f46e5'/%3E%3Cpath d='M140 216h232v80H140z' fill='%23ffffff'/%3E%3C/svg%3E`;
+            const manifestData = {
+                name: "Multi-Console Web Emulator",
+                short_name: "WebEmu",
+                start_url: ".",
+                display: "standalone",
+                background_color: "#0f1117",
+                theme_color: "#0f1117",
+                icons: [{ src: svgIcon, sizes: "512x512", type: "image/svg+xml", purpose: "any maskable" }]
+            };
+            const manifestBlob = new Blob([JSON.stringify(manifestData)], { type: 'application/manifest+json' });
+            document.getElementById('pwaManifest').href = URL.createObjectURL(manifestBlob);
+
+            // 2. Register Advanced Offline Caching Service Worker via Blob
+            if ('serviceWorker' in navigator) {
+                const swCode = `
+                    const CACHE_NAME = 'emujs-offline-v1';
+                    const ASSETS_TO_CACHE = [
+                        'https://cdn.tailwindcss.com',
+                        'https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.10.2/nipplejs.min.js',
+                        'https://cdn.emulatorjs.org/stable/data/loader.js'
+                    ];
+
+                    self.addEventListener('install', e => {
+                        e.waitUntil(
+                            caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS_TO_CACHE))
+                        );
+                        self.skipWaiting();
+                    });
+
+                    self.addEventListener('activate', e => {
+                        e.waitUntil(
+                            caches.keys().then(keys => Promise.all(
+                                keys.map(key => { if (key !== CACHE_NAME) return caches.delete(key); })
+                            ))
+                        );
+                        self.clients.claim();
+                    });
+
+                    self.addEventListener('fetch', e => {
+                        const url = new URL(e.request.url);
+                        
+                        // Handle EmulatorJS CDN dynamic assets (cores, wasm, scripts)
+                        if (url.hostname.includes('emulatorjs.org')) {
+                            e.respondWith(
+                                caches.open(CACHE_NAME).then(async cache => {
+                                    const cachedResponse = await cache.match(e.request);
+                                    if (cachedResponse) return cachedResponse;
+                                    try {
+                                        const networkResponse = await fetch(e.request);
+                                        if (networkResponse && networkResponse.status === 200) {
+                                            cache.put(e.request, networkResponse.clone());
+                                        }
+                                        return networkResponse;
+                                    } catch (err) {
+                                        // Offline fallback if asset isn't cached yet
+                                        return new Response('Network error & asset not cached for offline use.', { status: 404 });
+                                    }
+                                })
+                            );
+                        } else {
+                            // Standard cache-first / network-fallback for other static CDNs
+                            e.respondWith(
+                                caches.match(e.request).then(cached => cached || fetch(e.request))
+                            );
+                        }
+                    });
+                `;
+                const swBlob = new Blob([swCode], { type: 'text/javascript' });
+                navigator.serviceWorker.register(URL.createObjectURL(swBlob)).catch(err => console.log('SW error:', err));
+            }
+        })();
+
+        // PWA Install Prompt Handlers
+        let deferredPrompt;
+        const installBtn = document.getElementById('installBtn');
+
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            installBtn.classList.remove('hidden');
+        });
+
+        installBtn.addEventListener('click', async () => {
+            if (!deferredPrompt) return;
+            deferredPrompt.prompt();
+            const { outcome } = await deferredPrompt.userChoice;
+            if (outcome === 'accepted') {
+                installBtn.classList.add('hidden');
+            }
+            deferredPrompt = null;
+        });
+
+        window.addEventListener('appinstalled', () => {
+            installBtn.classList.add('hidden');
+            deferredPrompt = null;
+        });
+
+        // Emulator Logic
         if (typeof window.GamepadHandler === 'undefined') {
             window.GamepadHandler = { init: function() {}, update: function() {} };
         }
@@ -108,7 +219,6 @@
         let activeObjectUrl = null;
         let selectedConsole = 'nds';
 
-        // Console configurations: names and supported extensions
         const consoleConfigs = {
             nds: { name: 'Nintendo DS', exts: ['.nds', '.zip', '.7z'] },
             gba: { name: 'Game Boy Advance', exts: ['.gba', '.zip', '.7z'] },
@@ -122,29 +232,16 @@
             segaGG: { name: 'Game Gear', exts: ['.gg', '.zip', '.7z'] }
         };
 
-        // File extension auto-detection mapping
         const extToConsole = {
-            'nds': 'nds',
-            'gba': 'gba',
-            'gbc': 'gbc',
-            'gb': 'gb',
-            'nes': 'nes',
-            'snes': 'snes',
-            'smc': 'snes',
-            'n64': 'n64',
-            'z64': 'n64',
-            'iso': 'psx',
-            'bin': 'psx',
-            'md': 'segaMD',
-            'gen': 'segaMD',
-            'smd': 'segaMD',
-            'gg': 'segaGG'
+            'nds': 'nds', 'gba': 'gba', 'gbc': 'gbc', 'gb': 'gb',
+            'nes': 'nes', 'snes': 'snes', 'smc': 'snes',
+            'n64': 'n64', 'z64': 'n64', 'iso': 'psx', 'bin': 'psx',
+            'md': 'segaMD', 'gen': 'segaMD', 'smd': 'segaMD', 'gg': 'segaGG'
         };
 
         function updateSelectedConsole(consoleKey) {
             selectedConsole = consoleKey;
             document.getElementById('consoleSelectHeader').value = consoleKey;
-            
             const config = consoleConfigs[consoleKey];
             if (config) {
                 document.getElementById('dropZoneTitle').textContent = `Drag ${config.name} ROM here`;
@@ -161,7 +258,6 @@
             const file = event.target.files[0];
             if (!file) return;
 
-            // Auto-detect console by extension if matched, otherwise use selected dropdown console
             const detectedConsole = detectConsoleFromFile(file.name);
             if (detectedConsole) {
                 selectedConsole = detectedConsole;
@@ -175,7 +271,6 @@
         }
 
         function startEmulator(name, url, core) {
-            // Hide selection elements and take over full screen width/height
             document.getElementById('appHeader').classList.add('hidden');
             document.getElementById('mainContent').classList.add('hidden');
             document.getElementById('emulatorWrapper').classList.remove('hidden');
@@ -185,10 +280,10 @@
 
             window.EJS_player = '#emulator';
             window.EJS_gameUrl = url;
-            window.EJS_core = core; // Set the selected console core dynamically
+            window.EJS_core = core;
             window.EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
             window.EJS_startOnLoaded = true;
-            window.EJS_mouse = true; // Essential for touch screen mapping
+            window.EJS_mouse = true;
 
             const existingScript = document.getElementById('ejsLoader');
             if (existingScript) existingScript.remove();
@@ -213,7 +308,6 @@
             document.getElementById('romInput').value = '';
         }
 
-        // Handle drag and drop functionality
         const dropZone = document.getElementById('dropZone');
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
             dropZone.addEventListener(eventName, preventDefaults, false);
@@ -226,8 +320,7 @@
         }
 
         dropZone.addEventListener('drop', (e) => {
-            const dt = e.dataTransfer;
-            const files = dt.files;
+            const files = e.dataTransfer.files;
             if (files.length > 0) {
                 document.getElementById('romInput').files = files;
                 loadRom({ target: { files: files } });
